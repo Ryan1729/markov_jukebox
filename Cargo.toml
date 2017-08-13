@@ -1,0 +1,10 @@
+[package]
+name = "markov_jukebox"
+version = "0.1.0"
+authors = ["Ryan1729 <Ryan1729@gmail.com>"]
+
+[dependencies]
+sample = "0.6"
+find_folder = "0.3"
+hound = "2.0"
+portaudio = "0.7"
