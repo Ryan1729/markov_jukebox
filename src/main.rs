@@ -22,7 +22,7 @@ fn main() {
 
 fn run() -> Result<(), pa::Error> {
     // Get the frames to play back.
-    let frames: Vec<wav::Frame> = frames(wav::PATH);
+    let frames: Vec<wav::Frame> = read_frames(wav::PATH);
     let mut signal = frames.clone().into_iter();
 
     // Initialise PortAudio.
@@ -32,6 +32,7 @@ fn run() -> Result<(), pa::Error> {
         SAMPLE_RATE,
         FRAMES_PER_BUFFER,
     ));
+
 
     // Define the callback which provides PortAudio the audio.
     let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
@@ -55,11 +56,13 @@ fn run() -> Result<(), pa::Error> {
     try!(stream.stop());
     try!(stream.close());
 
+    write_frames(&frames, None);
+
     Ok(())
 }
 
 // Given the file name, produces a Vec of `Frame`s which may be played back.
-fn frames(file_name: &'static str) -> Vec<wav::Frame> {
+fn read_frames(file_name: &'static str) -> Vec<wav::Frame> {
     let assets = find_folder::Search::ParentsThenKids(5, 5)
         .for_folder("assets")
         .unwrap();
@@ -74,4 +77,42 @@ fn frames(file_name: &'static str) -> Vec<wav::Frame> {
         .from_hz_to_hz(spec.sample_rate as f64, SAMPLE_RATE as f64)
         .take(new_duration)
         .collect()
+}
+
+fn write_frames(frames: &Vec<wav::Frame>, optional_name: Option<&str>) {
+    if let Some(name) = optional_name {
+        write_frames_with_name(frames, name)
+    } else {
+        let name = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            .to_string();
+
+        write_frames_with_name(frames, &name)
+    }
+}
+
+fn write_frames_with_name(frames: &Vec<wav::Frame>, name: &str) {
+    let mut path = std::path::PathBuf::new();
+    path.push("output");
+    path.push(name);
+    path.set_extension("wav");
+
+    let spec = hound::WavSpec {
+        channels: wav::NUM_CHANNELS as _,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+
+    for frame in frames.iter() {
+        for channel in 0..wav::NUM_CHANNELS {
+            writer.write_sample(frame[channel]).unwrap();
+        }
+    }
+
+    writer.finalize().unwrap();
 }
