@@ -2,10 +2,12 @@ extern crate find_folder;
 extern crate hound;
 extern crate portaudio as pa;
 extern crate sample;
+extern crate rand;
 
 use sample::{signal, Signal, ToFrameSliceMut};
 
-// Thumb piano.
+use rand::{Rng, StdRng, SeedableRng};
+
 mod wav {
     pub const NUM_CHANNELS: usize = 2;
     pub const PATH: &'static str = "narrow.wav";
@@ -29,15 +31,18 @@ fn main() {
 
     let play = matches.is_present("play");
 
+    let seed: &[_] = &[42];
+    let mut rng: StdRng = SeedableRng::from_seed(seed);
+
     if let Some(filenames) = matches.values_of("filenames") {
-        run(filenames.collect(), play).unwrap();
+        run(filenames.collect(), play, &mut rng).unwrap();
     } else {
         println!("No filenames recieved");
     }
 
 }
 
-fn run(filenames: Vec<&str>, play: bool) -> Result<(), pa::Error> {
+fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::Error> {
     if play {
         // Initialise PortAudio.
         let pa = try!(pa::PortAudio::new());
@@ -74,12 +79,14 @@ fn run(filenames: Vec<&str>, play: bool) -> Result<(), pa::Error> {
             try!(stream.stop());
             try!(stream.close());
 
-            write_frames(&frames, None);
+            let blended_frames = blend_frames(&frames, rng);
+            write_frames(&blended_frames, None);
         }
     } else {
         for filename in filenames.iter() {
             let frames: Vec<wav::Frame> = read_frames(filename);
-            write_frames(&frames, None);
+            let blended_frames = blend_frames(&frames, rng);
+            write_frames(&blended_frames, None);
         }
     }
 
@@ -101,6 +108,58 @@ fn read_frames(file_name: &str) -> Vec<wav::Frame> {
         .from_hz_to_hz(spec.sample_rate as f64, SAMPLE_RATE as f64)
         .take(new_duration)
         .collect()
+}
+
+const SILENCE: wav::Frame = [0; wav::NUM_CHANNELS];
+
+fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame> {
+    let len = frames.len();
+
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let next_frames = get_next_frames(frames);
+
+    let mut result = Vec::with_capacity(len);
+
+    let default = vec![SILENCE];
+
+    let mut previous = (frames[0], frames[1]);
+    result.push(previous.0);
+    result.push(previous.1);
+
+    let mut count = 0;
+    while count < len {
+        let choices = next_frames
+            .get(&previous)
+            .and_then(|c| if c.len() > 0 { Some(c) } else { None })
+            .unwrap_or(&default);
+        let next = rng.choose(&choices).unwrap();
+
+        result.push(*next);
+
+        previous = (previous.1, *next);
+
+        count += 1;
+    }
+
+    result
+}
+
+use std::collections::HashMap;
+
+fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame), Vec<wav::Frame>> {
+    let mut result = HashMap::new();
+
+    for window in frames.windows(3) {
+        result
+            .entry((window[0], window[1]))
+            .or_insert(Vec::new())
+            .push(window[2]);
+    }
+
+    result
 }
 
 fn write_frames(frames: &Vec<wav::Frame>, optional_name: Option<&str>) {
