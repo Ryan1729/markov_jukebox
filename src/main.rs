@@ -126,7 +126,7 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
     let default = vec![SILENCE];
 
     let (first, second) = (frames[0], frames[1]);
-    let mut previous = (key_round_frame(first), key_round_frame(second));
+    let mut previous = (first, second);
     result.push(first);
     result.push(second);
 
@@ -134,13 +134,52 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
     while count < len {
         let choices = next_frames
             .get(&previous)
+            .or_else(|| {
+                let alternate_key = if previous.1[0] > 0 {
+                    (saturating_add(previous.0, 1), previous.1)
+                } else {
+                    (saturating_sub(previous.0, 1), previous.1)
+                };
+                next_frames.get(&alternate_key)
+            })
+            .or_else(|| {
+                let alternate_key = if previous.1[0] > 0 {
+                    (saturating_sub(previous.0, 1), previous.1)
+                } else {
+                    (saturating_add(previous.0, 1), previous.1)
+                };
+                next_frames.get(&alternate_key)
+            })
+            .or_else(|| {
+                let alternate_key = if previous.1[0] > 0 {
+                    (previous.0, saturating_add(previous.1, 1))
+                } else {
+                    (previous.0, saturating_sub(previous.1, 1))
+                };
+                next_frames.get(&alternate_key)
+            })
+            .or_else(|| {
+                let alternate_key = if previous.1[0] > 0 {
+                    (previous.0, saturating_sub(previous.1, 1))
+                } else {
+                    (previous.0, saturating_add(previous.1, 1))
+                };
+                next_frames.get(&alternate_key)
+            })
             .and_then(|c| if c.len() > 0 { Some(c) } else { None })
-            .unwrap_or(&default);
+            .unwrap_or_else(|| {
+
+
+                if cfg!(debug_assertions) {
+                    println!("default at {}", count);
+                }
+                &default
+            });
         let next = rng.choose(&choices).unwrap();
 
         result.push(*next);
 
-        previous = (key_round_frame(previous.1), key_round_frame(*next));
+        previous = (previous.1, *next);
 
         count += 1;
     }
@@ -155,13 +194,34 @@ fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame)
 
     for window in frames.windows(3) {
         result
-            .entry((key_round_frame(window[0]), key_round_frame(window[1])))
+            .entry((window[0], window[1]))
             .or_insert(Vec::new())
             .push(window[2]);
+
+        if window[1] > window[0] && window[1] > window[2] {
+            result
+                .entry((window[0], saturating_sub(window[1], 1)))
+                .or_insert(Vec::new())
+                .push(window[2]);
+        }
+        if window[1] < window[0] && window[1] < window[2] {
+            result
+                .entry((window[0], saturating_add(window[1], 1)))
+                .or_insert(Vec::new())
+                .push(window[2]);
+        }
     }
 
     result
 }
+
+fn saturating_add(frame: wav::Frame, x: i16) -> wav::Frame {
+    [frame[0].saturating_add(x), frame[1].saturating_add(x)]
+}
+fn saturating_sub(frame: wav::Frame, x: i16) -> wav::Frame {
+    [frame[0].saturating_sub(x), frame[1].saturating_sub(x)]
+}
+
 
 fn key_round_frame(frame: wav::Frame) -> wav::Frame {
     [key_round(frame[0]), key_round(frame[1])]
