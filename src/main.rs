@@ -8,11 +8,9 @@ use sample::{signal, Signal, ToFrameSliceMut};
 
 use rand::{Rng, StdRng, SeedableRng};
 
-mod wav {
-    pub const NUM_CHANNELS: usize = 2;
-    pub const PATH: &'static str = "narrow.wav";
-    pub type Frame = [i16; NUM_CHANNELS];
-}
+
+pub const NUM_CHANNELS: usize = 2;
+pub type Frame = [i16; NUM_CHANNELS];
 
 const FRAMES_PER_BUFFER: u32 = 64;
 const SAMPLE_RATE: f64 = 44_100.0;
@@ -47,19 +45,19 @@ fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::
         // Initialise PortAudio.
         let pa = try!(pa::PortAudio::new());
         let settings = try!(pa.default_output_stream_settings::<i16>(
-            wav::NUM_CHANNELS as i32,
+            NUM_CHANNELS as i32,
             SAMPLE_RATE,
             FRAMES_PER_BUFFER,
         ));
 
         for filename in filenames.iter() {
             // Get the frames to play back.
-            let frames: Vec<wav::Frame> = read_frames(filename);
+            let frames: Vec<Frame> = read_frames(filename);
             let mut signal = frames.clone().into_iter();
 
             // Define the callback which provides PortAudio the audio.
             let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
-                let buffer: &mut [wav::Frame] = buffer.to_frame_slice_mut().unwrap();
+                let buffer: &mut [Frame] = buffer.to_frame_slice_mut().unwrap();
                 for out_frame in buffer {
                     match signal.next() {
                         Some(frame) => *out_frame = frame,
@@ -84,7 +82,7 @@ fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::
         }
     } else {
         for filename in filenames.iter() {
-            let frames: Vec<wav::Frame> = read_frames(filename);
+            let frames: Vec<Frame> = read_frames(filename);
             let blended_frames = blend_frames(&frames, rng);
             write_frames(&blended_frames, None);
         }
@@ -95,7 +93,7 @@ fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::
 }
 
 // Given the file name, produces a Vec of `Frame`s which may be played back.
-fn read_frames(file_name: &str) -> Vec<wav::Frame> {
+fn read_frames(file_name: &str) -> Vec<Frame> {
     println!("Loading {}", file_name);
 
     let mut reader = hound::WavReader::open(file_name).unwrap();
@@ -103,16 +101,16 @@ fn read_frames(file_name: &str) -> Vec<wav::Frame> {
     let duration = reader.duration();
     let new_duration = (duration as f64 * (SAMPLE_RATE as f64 / spec.sample_rate as f64)) as usize;
     let samples = reader.samples().map(|s| s.unwrap());
-    let signal = signal::from_interleaved_samples::<_, wav::Frame>(samples);
+    let signal = signal::from_interleaved_samples::<_, Frame>(samples);
     signal
         .from_hz_to_hz(spec.sample_rate as f64, SAMPLE_RATE as f64)
         .take(new_duration)
         .collect()
 }
 
-const SILENCE: wav::Frame = [0; wav::NUM_CHANNELS];
+const SILENCE: Frame = [0; NUM_CHANNELS];
 
-fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame> {
+fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     let len = frames.len();
 
     if len == 0 {
@@ -126,46 +124,13 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
     let default = vec![SILENCE];
 
     let (first, second) = (frames[0], frames[1]);
-    let mut previous = (first, second);
+    let mut previous = (true, first);
     result.push(first);
-    result.push(second);
 
     let mut count = 0;
     while count < len {
         let choices = next_frames
             .get(&previous)
-            .or_else(|| {
-                let alternate_key = if previous.1[0] > 0 {
-                    (saturating_add(previous.0, 1), previous.1)
-                } else {
-                    (saturating_sub(previous.0, 1), previous.1)
-                };
-                next_frames.get(&alternate_key)
-            })
-            .or_else(|| {
-                let alternate_key = if previous.1[0] > 0 {
-                    (saturating_sub(previous.0, 1), previous.1)
-                } else {
-                    (saturating_add(previous.0, 1), previous.1)
-                };
-                next_frames.get(&alternate_key)
-            })
-            .or_else(|| {
-                let alternate_key = if previous.1[0] > 0 {
-                    (previous.0, saturating_add(previous.1, 1))
-                } else {
-                    (previous.0, saturating_sub(previous.1, 1))
-                };
-                next_frames.get(&alternate_key)
-            })
-            .or_else(|| {
-                let alternate_key = if previous.1[0] > 0 {
-                    (previous.0, saturating_sub(previous.1, 1))
-                } else {
-                    (previous.0, saturating_add(previous.1, 1))
-                };
-                next_frames.get(&alternate_key)
-            })
             .and_then(|c| if c.len() > 0 { Some(c) } else { None })
             .unwrap_or_else(|| {
 
@@ -179,7 +144,7 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
 
         result.push(*next);
 
-        previous = (previous.1, *next);
+        previous = (is_ascending(previous.1, *next), *next);
 
         count += 1;
     }
@@ -189,12 +154,14 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
 
 use std::collections::HashMap;
 
-fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame), Vec<wav::Frame>> {
+fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(bool, Frame), Vec<Frame>> {
     let mut result = HashMap::new();
 
     for window in frames.windows(3) {
+        let ascending = is_ascending(window[0], window[1]);
+
         result
-            .entry((window[0], window[1]))
+            .entry((ascending, window[1]))
             .or_insert(Vec::new())
             .push(window[2]);
     }
@@ -202,15 +169,19 @@ fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame)
     result
 }
 
-fn saturating_add(frame: wav::Frame, x: i16) -> wav::Frame {
+fn is_ascending(f1: Frame, f2: Frame) -> bool {
+    f1[0] > f2[0]
+}
+
+fn saturating_add(frame: Frame, x: i16) -> Frame {
     [frame[0].saturating_add(x), frame[1].saturating_add(x)]
 }
-fn saturating_sub(frame: wav::Frame, x: i16) -> wav::Frame {
+fn saturating_sub(frame: Frame, x: i16) -> Frame {
     [frame[0].saturating_sub(x), frame[1].saturating_sub(x)]
 }
 
 
-fn key_round_frame(frame: wav::Frame) -> wav::Frame {
+fn key_round_frame(frame: Frame) -> Frame {
     [key_round(frame[0]), key_round(frame[1])]
 }
 
@@ -224,7 +195,7 @@ fn key_round(x: i16) -> i16 {
 
 }
 
-fn write_frames(frames: &Vec<wav::Frame>, optional_name: Option<&str>) {
+fn write_frames(frames: &Vec<Frame>, optional_name: Option<&str>) {
     if let Some(name) = optional_name {
         write_frames_with_name(frames, name)
     } else {
@@ -238,7 +209,7 @@ fn write_frames(frames: &Vec<wav::Frame>, optional_name: Option<&str>) {
     }
 }
 
-fn write_frames_with_name(frames: &Vec<wav::Frame>, name: &str) {
+fn write_frames_with_name(frames: &Vec<Frame>, name: &str) {
     let mut path = std::path::PathBuf::new();
     path.push("output");
     path.push(name);
@@ -247,7 +218,7 @@ fn write_frames_with_name(frames: &Vec<wav::Frame>, name: &str) {
     println!("Writing to {:?}", path.to_str().unwrap());
 
     let spec = hound::WavSpec {
-        channels: wav::NUM_CHANNELS as _,
+        channels: NUM_CHANNELS as _,
         sample_rate: 44100,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
@@ -256,7 +227,7 @@ fn write_frames_with_name(frames: &Vec<wav::Frame>, name: &str) {
     let mut writer = hound::WavWriter::create(path, spec).unwrap();
 
     for frame in frames.iter() {
-        for channel in 0..wav::NUM_CHANNELS {
+        for channel in 0..NUM_CHANNELS {
             writer.write_sample(frame[channel]).unwrap();
         }
     }
