@@ -197,19 +197,6 @@ fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame)
             .entry((window[0], window[1]))
             .or_insert(Vec::new())
             .push(window[2]);
-
-        if window[1] > window[0] && window[1] > window[2] {
-            result
-                .entry((window[0], saturating_sub(window[1], 1)))
-                .or_insert(Vec::new())
-                .push(window[2]);
-        }
-        if window[1] < window[0] && window[1] < window[2] {
-            result
-                .entry((window[0], saturating_add(window[1], 1)))
-                .or_insert(Vec::new())
-                .push(window[2]);
-        }
     }
 
     result
