@@ -16,58 +16,82 @@ const FRAMES_PER_BUFFER: u32 = 64;
 const SAMPLE_RATE: f64 = 44_100.0;
 
 
+extern crate clap;
+use clap::{Arg, App};
+
 fn main() {
-    run().unwrap();
-}
+    let matches = App::new("markov_jukebox")
+        .arg(Arg::with_name("filenames").takes_value(true).required(true))
+        .arg(Arg::with_name("play").short("p").help(
+            "play the files before processing them",
+        ))
+        .get_matches();
 
-fn run() -> Result<(), pa::Error> {
-    // Get the frames to play back.
-    let frames: Vec<wav::Frame> = read_frames(wav::PATH);
-    let mut signal = frames.clone().into_iter();
+    let play = matches.is_present("play");
 
-    // Initialise PortAudio.
-    let pa = try!(pa::PortAudio::new());
-    let settings = try!(pa.default_output_stream_settings::<i16>(
-        wav::NUM_CHANNELS as i32,
-        SAMPLE_RATE,
-        FRAMES_PER_BUFFER,
-    ));
-
-
-    // Define the callback which provides PortAudio the audio.
-    let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
-        let buffer: &mut [wav::Frame] = buffer.to_frame_slice_mut().unwrap();
-        for out_frame in buffer {
-            match signal.next() {
-                Some(frame) => *out_frame = frame,
-                None => return pa::Complete,
-            }
-        }
-        pa::Continue
-    };
-
-    let mut stream = try!(pa.open_non_blocking_stream(settings, callback));
-    try!(stream.start());
-
-    while let Ok(true) = stream.is_active() {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    if let Some(filenames) = matches.values_of("filenames") {
+        run(filenames.collect(), play).unwrap();
+    } else {
+        println!("No filenames recieved");
     }
 
-    try!(stream.stop());
-    try!(stream.close());
+}
 
-    write_frames(&frames, None);
+fn run(filenames: Vec<&str>, play: bool) -> Result<(), pa::Error> {
+    if play {
+        // Initialise PortAudio.
+        let pa = try!(pa::PortAudio::new());
+        let settings = try!(pa.default_output_stream_settings::<i16>(
+            wav::NUM_CHANNELS as i32,
+            SAMPLE_RATE,
+            FRAMES_PER_BUFFER,
+        ));
+
+        for filename in filenames.iter() {
+            // Get the frames to play back.
+            let frames: Vec<wav::Frame> = read_frames(filename);
+            let mut signal = frames.clone().into_iter();
+
+            // Define the callback which provides PortAudio the audio.
+            let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
+                let buffer: &mut [wav::Frame] = buffer.to_frame_slice_mut().unwrap();
+                for out_frame in buffer {
+                    match signal.next() {
+                        Some(frame) => *out_frame = frame,
+                        None => return pa::Complete,
+                    }
+                }
+                pa::Continue
+            };
+
+            let mut stream = try!(pa.open_non_blocking_stream(settings, callback));
+            try!(stream.start());
+
+            while let Ok(true) = stream.is_active() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            try!(stream.stop());
+            try!(stream.close());
+
+            write_frames(&frames, None);
+        }
+    } else {
+        for filename in filenames.iter() {
+            let frames: Vec<wav::Frame> = read_frames(filename);
+            write_frames(&frames, None);
+        }
+    }
+
 
     Ok(())
 }
 
 // Given the file name, produces a Vec of `Frame`s which may be played back.
-fn read_frames(file_name: &'static str) -> Vec<wav::Frame> {
-    let assets = find_folder::Search::ParentsThenKids(5, 5)
-        .for_folder("assets")
-        .unwrap();
-    let sample_file = assets.join(file_name);
-    let mut reader = hound::WavReader::open(&sample_file).unwrap();
+fn read_frames(file_name: &str) -> Vec<wav::Frame> {
+    println!("Loading {}", file_name);
+
+    let mut reader = hound::WavReader::open(file_name).unwrap();
     let spec = reader.spec();
     let duration = reader.duration();
     let new_duration = (duration as f64 * (SAMPLE_RATE as f64 / spec.sample_rate as f64)) as usize;
@@ -98,6 +122,8 @@ fn write_frames_with_name(frames: &Vec<wav::Frame>, name: &str) {
     path.push("output");
     path.push(name);
     path.set_extension("wav");
+
+    println!("Writing to {:?}", path.to_str().unwrap());
 
     let spec = hound::WavSpec {
         channels: wav::NUM_CHANNELS as _,
