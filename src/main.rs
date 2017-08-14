@@ -125,9 +125,10 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
 
     let default = vec![SILENCE];
 
-    let mut previous = (frames[0], frames[1]);
-    result.push(previous.0);
-    result.push(previous.1);
+    let (first, second) = (frames[0], frames[1]);
+    let mut previous = (key_round_frame(first), key_round_frame(second));
+    result.push(first);
+    result.push(second);
 
     let mut count = 0;
     while count < len {
@@ -139,7 +140,7 @@ fn blend_frames<R: Rng>(frames: &Vec<wav::Frame>, rng: &mut R) -> Vec<wav::Frame
 
         result.push(*next);
 
-        previous = (previous.1, *next);
+        previous = (key_round_frame(previous.1), key_round_frame(*next));
 
         count += 1;
     }
@@ -154,12 +155,26 @@ fn get_next_frames(frames: &Vec<wav::Frame>) -> HashMap<(wav::Frame, wav::Frame)
 
     for window in frames.windows(3) {
         result
-            .entry((window[0], window[1]))
+            .entry((key_round_frame(window[0]), key_round_frame(window[1])))
             .or_insert(Vec::new())
             .push(window[2]);
     }
 
     result
+}
+
+fn key_round_frame(frame: wav::Frame) -> wav::Frame {
+    [key_round(frame[0]), key_round(frame[1])]
+}
+
+fn key_round(x: i16) -> i16 {
+    // if x & 0b10 == 0 {
+    //     x & !0b11
+    // } else {
+    //     (x | 0b11).saturating_add(1)
+    // }
+    if x & 1 == 0 { x } else { (x).saturating_add(1) }
+
 }
 
 fn write_frames(frames: &Vec<wav::Frame>, optional_name: Option<&str>) {
