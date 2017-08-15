@@ -135,16 +135,9 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     rng.gen_range(0, 12);
 
     let mut count = 0;
+    println!("{} < {}   {} ", count, len, result.len());
     while count < len {
-        let choices = next_frames
-            .get(&previous)
-            .and_then(|c| if c.len() > 0 { Some(c) } else { None })
-            .unwrap_or_else(|| {
-                if cfg!(debug_assertions) {
-                    println!("default at {}", count);
-                }
-                &default
-            });
+        let choices = get_choices(&next_frames, previous);
 
         let next = *rng.choose(&choices).unwrap();
 
@@ -154,13 +147,63 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
         count += 1;
     }
+    println!("{}", result.len());
+    result
+}
+
+const MINIMUM_CHOICES: usize = 5;
+
+fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
+    let mut result = Vec::new();
+
+    get_choices_helper(next_frames, previous, MINIMUM_CHOICES, &mut result);
 
     result
+}
+fn get_choices_helper(
+    next_frames: &NextFrames,
+    previous: (Frame, Frame),
+    needed: usize,
+    result: &mut Vec<Frame>,
+) {
+    if result.len() >= needed {
+        return;
+    };
+
+    if let Some(choices) = next_frames.get(&previous) {
+        result.extend(choices.iter());
+    }
+
+    if result.len() >= needed {
+        return;
+    };
+
+    let offsets = [(0, 1), (-1, 0), (0, -1), (1, 0)];
+
+    for &(offset_0, offset_1) in offsets.iter() {
+        let new_key = (
+            saturating_add(previous.0, offset_0),
+            saturating_add(previous.1, offset_1),
+        );
+        get_choices_helper(
+            next_frames,
+            new_key,
+            needed.saturating_sub(result.len()),
+            result,
+        );
+
+        if result.len() >= needed {
+            return;
+        };
+
+    }
 }
 
 use std::collections::HashMap;
 
-fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(Frame, Frame), Vec<Frame>> {
+type NextFrames = HashMap<(Frame, Frame), Vec<Frame>>;
+
+fn get_next_frames(frames: &Vec<Frame>) -> NextFrames {
     let mut result = HashMap::new();
 
     for window in frames.windows(3) {
