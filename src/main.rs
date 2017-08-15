@@ -153,50 +153,44 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
 const MINIMUM_CHOICES: usize = 5;
 
+use std::collections::HashSet;
+
 fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
+    let mut seen = HashSet::new();
+
+    //order is not important beyond BFS, so FIFO will do
+    let mut queue = Vec::new();
+
     let mut result = Vec::new();
 
-    get_choices_helper(next_frames, previous, MINIMUM_CHOICES, &mut result);
+    seen.insert(previous);
+    queue.push(previous);
+
+    while let Some(current) = queue.pop() {
+        if let Some(choices) = next_frames.get(&current) {
+            result.extend(choices);
+        }
+
+        if result.len() >= MINIMUM_CHOICES {
+            return result;
+        }
+
+        let offsets = [(0, 1), (-1, 0), (0, -1), (1, 0)];
+
+        for &(offset_0, offset_1) in offsets.iter() {
+            let new_key = (
+                saturating_add(previous.0, offset_0),
+                saturating_add(previous.1, offset_1),
+            );
+
+            queue.push(new_key)
+        }
+
+
+    }
+
 
     result
-}
-fn get_choices_helper(
-    next_frames: &NextFrames,
-    previous: (Frame, Frame),
-    needed: usize,
-    result: &mut Vec<Frame>,
-) {
-    if result.len() >= needed {
-        return;
-    };
-
-    if let Some(choices) = next_frames.get(&previous) {
-        result.extend(choices.iter());
-    }
-
-    if result.len() >= needed {
-        return;
-    };
-
-    let offsets = [(0, 1), (-1, 0), (0, -1), (1, 0)];
-
-    for &(offset_0, offset_1) in offsets.iter() {
-        let new_key = (
-            saturating_add(previous.0, offset_0),
-            saturating_add(previous.1, offset_1),
-        );
-        get_choices_helper(
-            next_frames,
-            new_key,
-            needed.saturating_sub(result.len()),
-            result,
-        );
-
-        if result.len() >= needed {
-            return;
-        };
-
-    }
 }
 
 use std::collections::HashMap;
