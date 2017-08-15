@@ -108,7 +108,7 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
         .collect()
 }
 
-const SILENCE: [Frame; WINDOW_SIZE] = [[0; NUM_CHANNELS]; WINDOW_SIZE];
+const SILENCE: Frame = [0; NUM_CHANNELS];
 
 fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     let len = frames.len();
@@ -125,12 +125,14 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
     let mut result = Vec::with_capacity(len);
 
-    let default = vec![0];
+    let default = vec![SILENCE];
 
-    let mut previous = (frames[0], frames[WINDOW_SIZE - 1]);
-    for i in 0..WINDOW_SIZE {
+    let mut previous = (frames[0], frames[1]);
+    for i in 0..2 {
         result.push(frames[i]);
     }
+
+    rng.gen_range(0, 12);
 
     let mut count = 0;
     while count < len {
@@ -144,18 +146,13 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
                 &default
             });
 
-        let next_index = *rng.choose(&choices).unwrap();
+        let next = *rng.choose(&choices).unwrap();
 
-        let next = &frames[next_index..(next_index + WINDOW_SIZE)];
+        result.push(next);
 
-        for frame in next.iter() {
-            println!("{:?}", (frame[0], frame[1]));
-            result.push(*frame);
-        }
+        previous = (previous.1, next);
 
-        previous = (next[0], next[WINDOW_SIZE - 1]);
-
-        count += WINDOW_SIZE;
+        count += 1;
     }
 
     result
@@ -163,26 +160,17 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
 use std::collections::HashMap;
 
-const WINDOW_SIZE: usize = 16384;
-
-fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(Frame, Frame), Vec<usize>> {
+fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(Frame, Frame), Vec<Frame>> {
     let mut result = HashMap::new();
 
-    let mut current_index = 0;
-    for window in frames.windows(WINDOW_SIZE) {
+    for window in frames.windows(3) {
         result
-            .entry((window[0], window[WINDOW_SIZE - 1]))
+            .entry((window[0], window[1]))
             .or_insert(Vec::new())
-            .push(current_index);
-
-        current_index += 1;
+            .push(window[2]);
     }
 
     result
-}
-
-fn is_ascending(f1: Frame, f2: Frame) -> bool {
-    f1[0] > f2[0]
 }
 
 fn saturating_add(frame: Frame, x: i16) -> Frame {
