@@ -108,7 +108,7 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
         .collect()
 }
 
-const SILENCE: Frame = [0; NUM_CHANNELS];
+const SILENCE: [Frame; WINDOW_SIZE] = [[0; NUM_CHANNELS]; WINDOW_SIZE];
 
 fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     let len = frames.len();
@@ -117,15 +117,20 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
         return Vec::new();
     }
 
+    println!("get_next_frames");
+
     let next_frames = get_next_frames(frames);
+
+    println!("done get_next_frames");
 
     let mut result = Vec::with_capacity(len);
 
-    let default = vec![SILENCE];
+    let default = vec![0];
 
-    let (first, second) = (frames[0], frames[1]);
-    let mut previous = (true, first);
-    result.push(first);
+    let mut previous = (frames[0], frames[WINDOW_SIZE - 1]);
+    for i in 0..WINDOW_SIZE {
+        result.push(frames[i]);
+    }
 
     let mut count = 0;
     while count < len {
@@ -133,20 +138,24 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
             .get(&previous)
             .and_then(|c| if c.len() > 0 { Some(c) } else { None })
             .unwrap_or_else(|| {
-
-
                 if cfg!(debug_assertions) {
                     println!("default at {}", count);
                 }
                 &default
             });
-        let next = rng.choose(&choices).unwrap();
 
-        result.push(*next);
+        let next_index = *rng.choose(&choices).unwrap();
 
-        previous = (is_ascending(previous.1, *next), *next);
+        let next = &frames[next_index..(next_index + WINDOW_SIZE)];
 
-        count += 1;
+        for frame in next.iter() {
+            println!("{:?}", (frame[0], frame[1]));
+            result.push(*frame);
+        }
+
+        previous = (next[0], next[WINDOW_SIZE - 1]);
+
+        count += WINDOW_SIZE;
     }
 
     result
@@ -154,16 +163,19 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
 use std::collections::HashMap;
 
-fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(bool, Frame), Vec<Frame>> {
+const WINDOW_SIZE: usize = 16384;
+
+fn get_next_frames(frames: &Vec<Frame>) -> HashMap<(Frame, Frame), Vec<usize>> {
     let mut result = HashMap::new();
 
-    for window in frames.windows(3) {
-        let ascending = is_ascending(window[0], window[1]);
-
+    let mut current_index = 0;
+    for window in frames.windows(WINDOW_SIZE) {
         result
-            .entry((ascending, window[1]))
+            .entry((window[0], window[WINDOW_SIZE - 1]))
             .or_insert(Vec::new())
-            .push(window[2]);
+            .push(current_index);
+
+        current_index += 1;
     }
 
     result
