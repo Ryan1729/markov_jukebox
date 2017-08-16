@@ -6,7 +6,7 @@ extern crate rand;
 
 use sample::{signal, Signal, ToFrameSliceMut};
 
-use rand::{Rng, StdRng, SeedableRng};
+use rand::{Rng, SeedableRng, StdRng};
 
 
 pub const NUM_CHANNELS: usize = 2;
@@ -17,14 +17,16 @@ const SAMPLE_RATE: f64 = 44_100.0;
 
 
 extern crate clap;
-use clap::{Arg, App};
+use clap::{App, Arg};
 
 fn main() {
     let matches = App::new("markov_jukebox")
         .arg(Arg::with_name("filenames").takes_value(true).required(true))
-        .arg(Arg::with_name("play").short("p").help(
-            "play the files before processing them",
-        ))
+        .arg(
+            Arg::with_name("play")
+                .short("p")
+                .help("play the files before processing them"),
+        )
         .get_matches();
 
     let play = matches.is_present("play");
@@ -125,8 +127,6 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
     let mut result = Vec::with_capacity(len);
 
-    let default = vec![SILENCE];
-
     let mut previous = (frames[0], frames[1]);
     for i in 0..2 {
         result.push(frames[i]);
@@ -135,11 +135,22 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     rng.gen_range(0, 12);
 
     let mut count = 0;
-    println!("{} < {}   {} ", count, len, result.len());
+    println!("{} < {} ", count, len);
     while count < len {
         let choices = get_choices(&next_frames, previous);
+        println!("choices {:?}", choices);
 
-        let next = *rng.choose(&choices).unwrap();
+        // let next = *rng.choose(&choices).unwrap();
+        // let next = *choices.last().unwrap();
+        let next = *choices
+            .iter()
+            .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
+            .unwrap();
+
+        println!("{:?}", next);
+        if next == SILENCE {
+            println!("{:?} to SILENCE", previous);
+        }
 
         result.push(next);
 
@@ -153,44 +164,71 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
 const MINIMUM_CHOICES: usize = 5;
 
-use std::collections::HashSet;
-
+// https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search
 fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
-    let mut seen = HashSet::new();
-
-    //order is not important beyond BFS, so FIFO will do
-    let mut queue = Vec::new();
+    let mut depth = 0;
 
     let mut result = Vec::new();
 
-    seen.insert(previous);
-    queue.push(previous);
+    let left = (-1, 0);
+    let up = (0, 1);
+    let right = (1, 0);
+    let down = (0, -1);
 
-    while let Some(current) = queue.pop() {
-        if let Some(choices) = next_frames.get(&current) {
-            result.extend(choices);
-        }
+    let upward = [left, up, right];
+    let downward = [right, down, left];
+    //`upward` and `downward` will cover the space that these would cover
+    //if they inculded `up` and `down`
+    let rightward = [right];
+    let leftward = [left];
+
+    while depth <= 16 {
+        get_choices_helper(next_frames, previous, &mut result, &leftward, depth);
+        get_choices_helper(next_frames, previous, &mut result, &upward, depth);
+        get_choices_helper(next_frames, previous, &mut result, &rightward, depth);
+        get_choices_helper(next_frames, previous, &mut result, &downward, depth);
 
         if result.len() >= MINIMUM_CHOICES {
             return result;
         }
 
-        let offsets = [(0, 1), (-1, 0), (0, -1), (1, 0)];
-
-        for &(offset_0, offset_1) in offsets.iter() {
-            let new_key = (
-                saturating_add(previous.0, offset_0),
-                saturating_add(previous.1, offset_1),
-            );
-
-            queue.push(new_key)
-        }
-
-
+        println!("depth {}", depth);
+        depth += 1;
     }
 
-
     result
+}
+
+fn get_choices_helper(
+    next_frames: &NextFrames,
+    current: (Frame, Frame),
+    result: &mut Vec<Frame>,
+    offsets: &[(i16, i16)],
+    depth: usize,
+) {
+    if depth == 0 {
+        if let Some(choices) = next_frames.get(&current) {
+            result.extend(choices);
+            result.dedup();
+        }
+
+        return;
+    }
+
+    // println!("current {:?} depth {}", current, depth);
+
+    for &(offset_0, offset_1) in offsets.iter() {
+        let new_key = (
+            saturating_add(current.0, offset_0),
+            saturating_add(current.1, offset_1),
+        );
+
+        get_choices_helper(next_frames, new_key, result, offsets, depth - 1);
+
+        if result.len() >= MINIMUM_CHOICES {
+            return;
+        }
+    }
 }
 
 use std::collections::HashMap;
@@ -207,7 +245,39 @@ fn get_next_frames(frames: &Vec<Frame>) -> NextFrames {
             .push(window[2]);
     }
 
+    {
+        let silence_target = result.entry((SILENCE, SILENCE)).or_insert(Vec::new());
+
+        silence_target.retain(|&frame| frame != SILENCE);
+
+        if silence_target.len() == 0 {
+            let middle = frames[frames.len() / 2];
+
+            if middle == SILENCE {
+                for &frame in frames.iter() {
+                    if magnitude(&frame) > 256 {
+                        silence_target.push(frame);
+                        break;
+                    }
+                }
+            } else {
+                silence_target.push(middle);
+            }
+
+            println!("{:?}", silence_target);
+        }
+    }
+
     result
+}
+
+use std::cmp::max;
+
+fn magnitude(frame: &Frame) -> i16 {
+
+    frame
+        .iter()
+        .fold(0, |acc, channel_value| max(acc, channel_value.abs()))
 }
 
 fn saturating_add(frame: Frame, x: i16) -> Frame {
@@ -228,7 +298,11 @@ fn key_round(x: i16) -> i16 {
     // } else {
     //     (x | 0b11).saturating_add(1)
     // }
-    if x & 1 == 0 { x } else { (x).saturating_add(1) }
+    if x & 1 == 0 {
+        x
+    } else {
+        (x).saturating_add(1)
+    }
 
 }
 
