@@ -135,37 +135,129 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     rng.gen_range(0, 12);
 
     let mut count = 0;
+    let mut progress = 0;
+
+    let mut keys: Vec<&(Frame, Frame)> = next_frames.keys().collect();
+
+    println!("sorting {}", keys.len());
+    keys.sort();
+    keys.reverse();
+    println!("shuffling");
+    rng.shuffle(&mut keys);
+
+
     println!("{} < {} ", count, len);
-    while count < len {
-        let choices = get_choices(&next_frames, previous);
-        println!("choices {:?}", choices);
+    while count < (len / 128) {
+        let choices = get_choices(&next_frames, &keys, previous);
+        // println!("choices {:?}", choices);
 
-        // let next = *rng.choose(&choices).unwrap();
+        let next = *rng.choose(&choices).unwrap();
         // let next = *choices.last().unwrap();
-        let next = *choices
-            .iter()
-            .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
-            .unwrap();
+        // let next = *choices
+        //     .iter()
+        //     .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
+        //     .unwrap();
 
-        println!("{:?}", next);
-        if next == SILENCE {
-            println!("{:?} to SILENCE", previous);
-        }
+        // println!("{:?}", next);
+        // if next == SILENCE {
+        //     println!("{:?} to SILENCE", previous);
+        // }
 
         result.push(next);
 
         previous = (previous.1, next);
 
         count += 1;
+        progress += 1;
+
+        if progress >= 65536 {
+            println!("{}", count);
+            progress = 0;
+        }
     }
-    println!("{}", result.len());
+    println!("wrote {}", result.len());
     result
+}
+
+fn distance_from(from: (Frame, Frame), to: (Frame, Frame)) -> i32 {
+    (from.0[0] as i32 - to.0[0] as i32).abs() + (from.0[1] as i32 - to.0[1] as i32).abs() +
+        (from.1[0] as i32 - to.1[0] as i32).abs() + (from.1[1] as i32 - to.1[1] as i32).abs()
 }
 
 const MINIMUM_CHOICES: usize = 5;
 
+fn get_choices(
+    next_frames: &NextFrames,
+    pool: &Vec<&(Frame, Frame)>,
+    previous: (Frame, Frame),
+) -> Vec<Frame> {
+    let mut nearest_n_keys = vec![(previous, 0)];
+
+    let threshold = stopping_threshold(pool.len() as _, MINIMUM_CHOICES as _);
+
+
+
+    for i in 0..(threshold / 128) {
+        if let Some(current) = pool.get(i) {
+            let current_distance = distance_from(previous, **current);
+
+            let len = nearest_n_keys.len();
+            let mut not_inserted_yet = true;
+            for i in (0..len).rev() {
+                let (_, distance) = nearest_n_keys[i];
+
+                if current_distance > distance || i == 0 {
+                    nearest_n_keys.insert(i + 1, (**current, current_distance));
+
+                    not_inserted_yet = false;
+
+                    break;
+                }
+            }
+
+            if not_inserted_yet {
+                nearest_n_keys.insert(0, (**current, current_distance));
+            }
+
+            if len > MINIMUM_CHOICES {
+                nearest_n_keys.truncate(MINIMUM_CHOICES);
+            }
+
+        } else {
+            break;
+        }
+    }
+
+    let mut result = Vec::new();
+
+    for &(key, _) in nearest_n_keys.iter() {
+        if let Some(choices) = next_frames.get(&key) {
+            result.extend(choices);
+        }
+    }
+
+    result
+}
+
+/// This is a genearlized solution to the well known secretary problem.
+/// see  [here](https://en.wikipedia.org/wiki/Secretary_problem).
+use std::f32::consts::E;
+/// `n` is the number of 'secretaries' available;
+/// `k` is the number we want to 'hire'.
+/// This formula is from the paper
+/// 'Optimal Online Data Sampling or How to Hire the Best Secretaries'
+/// [found here](http://cim.mcgill.ca/~yogesh/publications/crv2009.pdf),
+/// which does not provide a formal proof!
+fn stopping_threshold(n: f32, k: f32) -> usize {
+    (n / (k * (E.powf(1.0 / k)))) as usize
+}
+
+//I'm keeping this around in case I ever want to compare the optimal solution to
+//another approximate solution or if with a sufficienly long audio track the space
+//becomes dense enough that this strategy will work.
 // https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search
-fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
+#[allow(unused_code)]
+fn get_choices_slow(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
     let mut depth = 0;
 
     let mut result = Vec::new();
@@ -183,10 +275,10 @@ fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame>
     let leftward = [left];
 
     while depth <= 16 {
-        get_choices_helper(next_frames, previous, &mut result, &leftward, depth);
-        get_choices_helper(next_frames, previous, &mut result, &upward, depth);
-        get_choices_helper(next_frames, previous, &mut result, &rightward, depth);
-        get_choices_helper(next_frames, previous, &mut result, &downward, depth);
+        get_choices_slow_helper(next_frames, previous, &mut result, &leftward, depth);
+        get_choices_slow_helper(next_frames, previous, &mut result, &upward, depth);
+        get_choices_slow_helper(next_frames, previous, &mut result, &rightward, depth);
+        get_choices_slow_helper(next_frames, previous, &mut result, &downward, depth);
 
         if result.len() >= MINIMUM_CHOICES {
             return result;
@@ -199,7 +291,7 @@ fn get_choices(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame>
     result
 }
 
-fn get_choices_helper(
+fn get_choices_slow_helper(
     next_frames: &NextFrames,
     current: (Frame, Frame),
     result: &mut Vec<Frame>,
@@ -223,7 +315,7 @@ fn get_choices_helper(
             saturating_add(current.1, offset_1),
         );
 
-        get_choices_helper(next_frames, new_key, result, offsets, depth - 1);
+        get_choices_slow_helper(next_frames, new_key, result, offsets, depth - 1);
 
         if result.len() >= MINIMUM_CHOICES {
             return;
