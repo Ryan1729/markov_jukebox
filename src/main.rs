@@ -142,23 +142,27 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     println!("sorting {}", keys.len());
     keys.sort();
     keys.reverse();
+
     println!("shuffling");
     rng.shuffle(&mut keys);
 
 
+
     println!("{} < {} ", count, len);
     while count < (len / 128) {
-        let choices = get_choices(&next_frames, &keys, previous);
+        let mut choices = get_choices(&next_frames, &keys, previous);
         // println!("choices {:?}", choices);
 
-        let next = *rng.choose(&choices).unwrap();
+        choices.retain(|&c| c != previous.0);
+
+        let next = *rng.choose(&choices).unwrap_or(&previous.1);
         // let next = *choices.last().unwrap();
         // let next = *choices
         //     .iter()
         //     .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
         //     .unwrap();
 
-        // println!("{:?}", next);
+        println!("{:?}", next);
         // if next == SILENCE {
         //     println!("{:?} to SILENCE", previous);
         // }
@@ -195,9 +199,7 @@ fn get_choices(
 
     let threshold = stopping_threshold(pool.len() as _, MINIMUM_CHOICES as _);
 
-
-
-    for i in 0..(threshold / 128) {
+    for i in 0..(threshold) {
         if let Some(current) = pool.get(i) {
             let current_distance = distance_from(previous, **current);
 
@@ -256,7 +258,7 @@ fn stopping_threshold(n: f32, k: f32) -> usize {
 //another approximate solution or if with a sufficienly long audio track the space
 //becomes dense enough that this strategy will work.
 // https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search
-#[allow(unused_code)]
+#[allow(unused)]
 fn get_choices_slow(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
     let mut depth = 0;
 
@@ -291,6 +293,7 @@ fn get_choices_slow(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<F
     result
 }
 
+#[allow(unused)]
 fn get_choices_slow_helper(
     next_frames: &NextFrames,
     current: (Frame, Frame),
