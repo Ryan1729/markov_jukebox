@@ -1,10 +1,9 @@
 extern crate find_folder;
 extern crate hound;
-extern crate portaudio as pa;
 extern crate sample;
 extern crate rand;
 
-use sample::{signal, Signal, ToFrameSliceMut};
+use sample::{signal, Signal};
 
 use rand::{Rng, SeedableRng, StdRng};
 
@@ -12,7 +11,6 @@ use rand::{Rng, SeedableRng, StdRng};
 pub const NUM_CHANNELS: usize = 2;
 pub type Frame = [i16; NUM_CHANNELS];
 
-const FRAMES_PER_BUFFER: u32 = 64;
 const SAMPLE_RATE: f64 = 44_100.0;
 
 
@@ -28,11 +26,6 @@ fn main() {
                 .required(true),
         )
         .arg(
-            Arg::with_name("play")
-                .short("p")
-                .help("play the files before processing them"),
-        )
-        .arg(
             Arg::with_name("keep")
                 .short("k")
                 .help("keep used samples available for repeat uses."),
@@ -45,8 +38,8 @@ fn main() {
         )
         .get_matches();
 
+    //there used to be a `play` option. That's why this is a struct instead of a bool
     let settings = Settings {
-        play: matches.is_present("play"),
         remove: !matches.is_present("keep"),
     };
 
@@ -74,11 +67,10 @@ fn main() {
 }
 
 struct Settings {
-    pub play: bool,
     pub remove: bool,
 }
 
-fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<(), pa::Error> {
+fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<(), ()> {
     let frames: Vec<Frame> = {
         let mut frames = Vec::new();
 
@@ -91,44 +83,8 @@ fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<
         frames
     };
 
-    if settings.play {
-        // Initialise PortAudio.
-        let pa = try!(pa::PortAudio::new());
-        let pa_settings = try!(pa.default_output_stream_settings::<i16>(
-            NUM_CHANNELS as i32,
-            SAMPLE_RATE,
-            FRAMES_PER_BUFFER,
-        ));
-
-        let mut signal = frames.clone().into_iter();
-
-        // Define the callback which provides PortAudio the audio.
-        let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
-            let buffer: &mut [Frame] = buffer.to_frame_slice_mut().unwrap();
-            for out_frame in buffer {
-                match signal.next() {
-                    Some(frame) => *out_frame = frame,
-                    None => return pa::Complete,
-                }
-            }
-            pa::Continue
-        };
-
-        let mut stream = try!(pa.open_non_blocking_stream(pa_settings, callback));
-        try!(stream.start());
-
-        while let Ok(true) = stream.is_active() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        try!(stream.stop());
-        try!(stream.close());
-
-    }
-
     let blended_frames = blend_frames(&frames, rng, settings.remove);
     write_frames(&blended_frames, None);
-
 
     Ok(())
 }

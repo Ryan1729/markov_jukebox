@@ -7,6 +7,5 @@ authors = ["Ryan1729 <Ryan1729@gmail.com>"]
 sample = "0.6"
 find_folder = "0.3"
 hound = "2.0"
-portaudio = "0.7"
 clap = "2.26"
 rand = "0.3"
