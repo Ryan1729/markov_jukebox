@@ -127,6 +127,74 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
     let mut result = Vec::with_capacity(len);
 
+    let default = vec![SILENCE];
+
+    let mut previous = (frames[0], frames[1]);
+    for i in 0..2 {
+        result.push(frames[i]);
+    }
+
+    let mut keys: Vec<&(Frame, Frame)> = next_frames.keys().collect();
+
+    println!("sorting {}", keys.len());
+    keys.sort();
+    keys.reverse();
+
+    println!("shuffling");
+    rng.shuffle(&mut keys);
+
+    let mut count = 0;
+    let mut missed_count = 0;
+    while count < len {
+        let choices = next_frames
+            .get(&previous)
+            .and_then(|c| if c.len() > 0 { Some(c) } else { None })
+            .unwrap_or_else(|| {
+                if cfg!(debug_assertions) {
+                    println!("default at {}", count);
+                }
+                &default
+            });
+
+        let next = *rng.choose(&choices).unwrap();
+
+        if is_audible(&next) || is_audible(&previous.0) || is_audible(&previous.1) {
+            result.push(next);
+            missed_count = 0;
+        } else {
+            missed_count += 1;
+        }
+
+        if missed_count > 16 {
+            previous = **rng.choose(&keys).unwrap();
+            println!("rng.choose => {:?}", previous);
+        } else {
+            previous = (previous.1, next);
+        }
+
+
+        count += 1;
+    }
+
+    result
+}
+
+
+fn blend_frames_<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
+    let len = frames.len();
+
+    if len == 0 {
+        return Vec::new();
+    }
+
+    println!("get_next_frames");
+
+    let next_frames = get_next_frames(frames);
+
+    println!("done get_next_frames");
+
+    let mut result = Vec::with_capacity(len);
+
     let mut previous = (frames[0], frames[1]);
     for i in 0..2 {
         result.push(frames[i]);
@@ -381,30 +449,34 @@ fn get_next_frames(frames: &Vec<Frame>) -> NextFrames {
             .push(window[2]);
     }
 
-    {
-        let silence_target = result.entry((SILENCE, SILENCE)).or_insert(Vec::new());
-
-        silence_target.retain(|&frame| frame != SILENCE);
-
-        if silence_target.len() == 0 {
-            let middle = frames[frames.len() / 2];
-
-            if middle == SILENCE {
-                for &frame in frames.iter() {
-                    if magnitude(&frame) > 256 {
-                        silence_target.push(frame);
-                        break;
-                    }
-                }
-            } else {
-                silence_target.push(middle);
-            }
-
-            println!("{:?}", silence_target);
-        }
-    }
+    // {
+    //     let silence_target = result.entry((SILENCE, SILENCE)).or_insert(Vec::new());
+    //
+    //     silence_target.retain(|&frame| frame != SILENCE);
+    //
+    //     if silence_target.len() == 0 {
+    //         let middle = frames[frames.len() / 2];
+    //
+    //         if middle == SILENCE {
+    //             for &frame in frames.iter() {
+    //                 if magnitude(&frame) > 256 {
+    //                     silence_target.push(frame);
+    //                     break;
+    //                 }
+    //             }
+    //         } else {
+    //             silence_target.push(middle);
+    //         }
+    //
+    //         println!("{:?}", silence_target);
+    //     }
+    // }
 
     result
+}
+
+fn is_audible(frame: &Frame) -> bool {
+    magnitude(frame) > 128
 }
 
 use std::cmp::max;
