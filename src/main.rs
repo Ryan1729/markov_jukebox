@@ -146,12 +146,23 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
     println!("shuffling");
     rng.shuffle(&mut keys);
 
+    let nearest: HashMap<Bucket, Vec<&(Frame, Frame)>> = {
+        let mut bucketed = HashMap::new();
 
+        for key in keys.iter() {
+            bucketed
+                .entry(bucket(**key))
+                .or_insert_with(|| Vec::new())
+                .push(*key);
+        }
+
+        bucketed
+    };
 
     println!("{} < {} ", count, len);
     while count < (len / 128) {
-        let mut choices = get_choices(&next_frames, &keys, previous);
-        // println!("choices {:?}", choices);
+        let mut choices = get_choices(&next_frames, &nearest, previous);
+        println!("choices {:?}", choices);
 
         choices.retain(|&c| c != previous.0);
 
@@ -162,7 +173,7 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
         //     .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
         //     .unwrap();
 
-        println!("{:?}", next);
+        // println!("{:?}", next);
         // if next == SILENCE {
         //     println!("{:?} to SILENCE", previous);
         // }
@@ -192,12 +203,20 @@ const MINIMUM_CHOICES: usize = 5;
 
 fn get_choices(
     next_frames: &NextFrames,
-    pool: &Vec<&(Frame, Frame)>,
+    nearest: &HashMap<Bucket, Vec<&(Frame, Frame)>>,
     previous: (Frame, Frame),
 ) -> Vec<Frame> {
+    let default = Vec::new();
+    let pool = nearest.get(&bucket(previous)).unwrap_or_else(|| {
+
+        println!("nearest.get {:?} failed", bucket(previous));
+        &default
+    });
+
     let mut nearest_n_keys = vec![(previous, 0)];
 
-    let threshold = stopping_threshold(pool.len() as _, MINIMUM_CHOICES as _);
+    // let threshold = stopping_threshold(pool.len() as _, MINIMUM_CHOICES as _);
+    let threshold = pool.len();
 
     for i in 0..(threshold) {
         if let Some(current) = pool.get(i) {
@@ -239,6 +258,28 @@ fn get_choices(
     }
 
     result
+}
+
+
+type Bucket = (i8, i8, i8, i8);
+fn bucket(transition: (Frame, Frame)) -> Bucket {
+    // println!("transition {:?}", transition);
+
+    let result = (
+        (transition.0[0] / 128) as i8,
+        (transition.0[1] / 128) as i8,
+        (transition.1[0] / 128) as i8,
+        (transition.1[1] / 128) as i8,
+    );
+
+    // println!("bucket {:?}", result);
+
+    result
+}
+
+fn average_channels(frame: Frame) -> i16 {
+    debug_assert!(NUM_CHANNELS == 2);
+    frame[0].saturating_add(frame[1]) / 2
 }
 
 /// This is a genearlized solution to the well known secretary problem.
