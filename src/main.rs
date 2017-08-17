@@ -72,6 +72,18 @@ struct Settings {
 }
 
 fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<(), pa::Error> {
+    let frames: Vec<Frame> = {
+        let mut frames = Vec::new();
+
+        for filename in filenames.iter() {
+            let current_frames: Vec<Frame> = read_frames(filename);
+
+            frames.extend(&current_frames);
+        }
+
+        frames
+    };
+
     if settings.play {
         // Initialise PortAudio.
         let pa = try!(pa::PortAudio::new());
@@ -81,43 +93,34 @@ fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<
             FRAMES_PER_BUFFER,
         ));
 
-        for filename in filenames.iter() {
-            // Get the frames to play back.
-            let frames: Vec<Frame> = read_frames(filename);
-            let mut signal = frames.clone().into_iter();
+        let mut signal = frames.clone().into_iter();
 
-            // Define the callback which provides PortAudio the audio.
-            let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
-                let buffer: &mut [Frame] = buffer.to_frame_slice_mut().unwrap();
-                for out_frame in buffer {
-                    match signal.next() {
-                        Some(frame) => *out_frame = frame,
-                        None => return pa::Complete,
-                    }
+        // Define the callback which provides PortAudio the audio.
+        let callback = move |pa::OutputStreamCallbackArgs { buffer, .. }| {
+            let buffer: &mut [Frame] = buffer.to_frame_slice_mut().unwrap();
+            for out_frame in buffer {
+                match signal.next() {
+                    Some(frame) => *out_frame = frame,
+                    None => return pa::Complete,
                 }
-                pa::Continue
-            };
-
-            let mut stream = try!(pa.open_non_blocking_stream(pa_settings, callback));
-            try!(stream.start());
-
-            while let Ok(true) = stream.is_active() {
-                std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            pa::Continue
+        };
 
-            try!(stream.stop());
-            try!(stream.close());
+        let mut stream = try!(pa.open_non_blocking_stream(pa_settings, callback));
+        try!(stream.start());
 
-            let blended_frames = blend_frames(&frames, rng, settings.remove);
-            write_frames(&blended_frames, None);
+        while let Ok(true) = stream.is_active() {
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-    } else {
-        for filename in filenames.iter() {
-            let frames: Vec<Frame> = read_frames(filename);
-            let blended_frames = blend_frames(&frames, rng, settings.remove);
-            write_frames(&blended_frames, None);
-        }
+
+        try!(stream.stop());
+        try!(stream.close());
+
     }
+
+    let blended_frames = blend_frames(&frames, rng, settings.remove);
+    write_frames(&blended_frames, None);
 
 
     Ok(())
