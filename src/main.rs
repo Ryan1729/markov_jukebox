@@ -27,26 +27,36 @@ fn main() {
                 .short("p")
                 .help("play the files before processing them"),
         )
+        .arg(Arg::with_name("keep").short("k").help(
+            "allow endless generation by keeping used samples available for the repeat uses.",
+        ))
         .get_matches();
 
-    let play = matches.is_present("play");
-
+    let settings = Settings {
+        play: matches.is_present("play"),
+        remove: !matches.is_present("keep"),
+    };
     let seed: &[_] = &[42];
     let mut rng: StdRng = SeedableRng::from_seed(seed);
 
     if let Some(filenames) = matches.values_of("filenames") {
-        run(filenames.collect(), play, &mut rng).unwrap();
+        run(filenames.collect(), settings, &mut rng).unwrap();
     } else {
         println!("No filenames recieved");
     }
 
 }
 
-fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::Error> {
-    if play {
+struct Settings {
+    pub play: bool,
+    pub remove: bool,
+}
+
+fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<(), pa::Error> {
+    if settings.play {
         // Initialise PortAudio.
         let pa = try!(pa::PortAudio::new());
-        let settings = try!(pa.default_output_stream_settings::<i16>(
+        let pa_settings = try!(pa.default_output_stream_settings::<i16>(
             NUM_CHANNELS as i32,
             SAMPLE_RATE,
             FRAMES_PER_BUFFER,
@@ -69,7 +79,7 @@ fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::
                 pa::Continue
             };
 
-            let mut stream = try!(pa.open_non_blocking_stream(settings, callback));
+            let mut stream = try!(pa.open_non_blocking_stream(pa_settings, callback));
             try!(stream.start());
 
             while let Ok(true) = stream.is_active() {
@@ -79,13 +89,13 @@ fn run<R: Rng>(filenames: Vec<&str>, play: bool, rng: &mut R) -> Result<(), pa::
             try!(stream.stop());
             try!(stream.close());
 
-            let blended_frames = blend_frames(&frames, rng);
+            let blended_frames = blend_frames(&frames, rng, settings.remove);
             write_frames(&blended_frames, None);
         }
     } else {
         for filename in filenames.iter() {
             let frames: Vec<Frame> = read_frames(filename);
-            let blended_frames = blend_frames(&frames, rng);
+            let blended_frames = blend_frames(&frames, rng, settings.remove);
             write_frames(&blended_frames, None);
         }
     }
@@ -112,7 +122,7 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
 
 const SILENCE: Frame = [0; NUM_CHANNELS];
 
-fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
+fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R, remove: bool) -> Vec<Frame> {
     let len = frames.len();
 
     if len == 0 {
@@ -121,7 +131,7 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
     println!("get_next_frames");
 
-    let next_frames = get_next_frames(frames);
+    let mut next_frames = get_next_frames(frames);
 
     println!("done get_next_frames");
 
@@ -134,7 +144,7 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
         result.push(frames[i]);
     }
 
-    let mut keys: Vec<&(Frame, Frame)> = next_frames.keys().collect();
+    let mut keys: Vec<(Frame, Frame)> = next_frames.keys().map(|&k| k).collect();
 
     println!("sorting {}", keys.len());
     keys.sort();
@@ -145,16 +155,31 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
 
     let mut count = 0;
     let mut missed_count = 0;
-    while count < len {
-        let choices = next_frames
-            .get(&previous)
-            .and_then(|c| if c.len() > 0 { Some(c) } else { None })
-            .unwrap_or_else(|| {
-                if cfg!(debug_assertions) {
-                    println!("default at {}", count);
-                }
-                &default
-            });
+
+    let enough = if remove { (len * 3) / 4 } else { len };
+
+    while count < enough {
+        let choices = if remove {
+            next_frames
+                .remove(&previous)
+                .and_then(|c| if c.len() > 0 { Some(c) } else { None })
+                .unwrap_or_else(|| {
+                    if cfg!(debug_assertions) {
+                        println!("default at {}", count);
+                    }
+                    default.clone()
+                })
+        } else {
+            (*next_frames
+                .get(&previous)
+                .and_then(|c| if c.len() > 0 { Some(c) } else { None })
+                .unwrap_or_else(|| {
+                    if cfg!(debug_assertions) {
+                        println!("default at {}", count);
+                    }
+                    &default
+                })).clone()
+        };
 
         let next = *rng.choose(&choices).unwrap();
 
@@ -166,7 +191,7 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
         }
 
         if missed_count > 16 {
-            previous = **rng.choose(&keys).unwrap();
+            previous = *rng.choose(&keys).unwrap();
             println!("rng.choose => {:?}", previous);
         } else {
             previous = (previous.1, next);
