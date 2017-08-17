@@ -1,6 +1,6 @@
 # Markov Jukebox
 
-This is a commandline program that takes a set of `.wav` files and blends them together, using [markoc chains](https://en.wikipedia.org/wiki/Markov_chain).
+This is a commandline program that takes a set of `.wav` files and blends them together, using [markov chains](https://en.wikipedia.org/wiki/Markov_chain).
 
 # basic usage
 
