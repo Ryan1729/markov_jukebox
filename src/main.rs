@@ -30,14 +30,33 @@ fn main() {
         .arg(Arg::with_name("keep").short("k").help(
             "allow endless generation by keeping used samples available for the repeat uses.",
         ))
+        .arg(
+            Arg::with_name("seed")
+                .short("s")
+                .takes_value(true)
+                .help("the seed for the pseudo-random generator"),
+        )
         .get_matches();
 
     let settings = Settings {
         play: matches.is_present("play"),
         remove: !matches.is_present("keep"),
     };
-    let seed: &[_] = &[42];
-    let mut rng: StdRng = SeedableRng::from_seed(seed);
+
+    let seed: Vec<usize> = if let Some(passed_seed) = matches.value_of("seed") {
+        passed_seed.as_bytes().iter().map(|&b| b as usize).collect()
+    } else {
+        if cfg!(debug_assertions) {
+            vec![42]
+        } else {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|dur| dur.as_secs())
+                .unwrap_or(42);
+            vec![timestamp as usize]
+        }
+    };
+    let mut rng: StdRng = SeedableRng::from_seed(seed.as_slice());
 
     if let Some(filenames) = matches.values_of("filenames") {
         run(filenames.collect(), settings, &mut rng).unwrap();
@@ -204,262 +223,6 @@ fn blend_frames<R: Rng>(frames: &Vec<Frame>, rng: &mut R, remove: bool) -> Vec<F
     result
 }
 
-
-fn blend_frames_<R: Rng>(frames: &Vec<Frame>, rng: &mut R) -> Vec<Frame> {
-    let len = frames.len();
-
-    if len == 0 {
-        return Vec::new();
-    }
-
-    println!("get_next_frames");
-
-    let next_frames = get_next_frames(frames);
-
-    println!("done get_next_frames");
-
-    let mut result = Vec::with_capacity(len);
-
-    let mut previous = (frames[0], frames[1]);
-    for i in 0..2 {
-        result.push(frames[i]);
-    }
-
-    rng.gen_range(0, 12);
-
-    let mut count = 0;
-    let mut progress = 0;
-
-    let mut keys: Vec<&(Frame, Frame)> = next_frames.keys().collect();
-
-    println!("sorting {}", keys.len());
-    keys.sort();
-    keys.reverse();
-
-    println!("shuffling");
-    rng.shuffle(&mut keys);
-
-    let nearest: HashMap<Bucket, Vec<&(Frame, Frame)>> = {
-        let mut bucketed = HashMap::new();
-
-        for key in keys.iter() {
-            bucketed
-                .entry(bucket(**key))
-                .or_insert_with(|| Vec::new())
-                .push(*key);
-        }
-
-        bucketed
-    };
-
-    println!("{} < {} ", count, len);
-    while count < (len / 128) {
-        let mut choices = get_choices(&next_frames, &nearest, previous);
-        println!("choices {:?}", choices);
-
-        choices.retain(|&c| c != previous.0);
-
-        let next = *rng.choose(&choices).unwrap_or(&previous.1);
-        // let next = *choices.last().unwrap();
-        // let next = *choices
-        //     .iter()
-        //     .max_by(|f1, f2| magnitude(f1).cmp(&magnitude(f2)))
-        //     .unwrap();
-
-        // println!("{:?}", next);
-        // if next == SILENCE {
-        //     println!("{:?} to SILENCE", previous);
-        // }
-
-        result.push(next);
-
-        previous = (previous.1, next);
-
-        count += 1;
-        progress += 1;
-
-        if progress >= 65536 {
-            println!("{}", count);
-            progress = 0;
-        }
-    }
-    println!("wrote {}", result.len());
-    result
-}
-
-fn distance_from(from: (Frame, Frame), to: (Frame, Frame)) -> i32 {
-    (from.0[0] as i32 - to.0[0] as i32).abs() + (from.0[1] as i32 - to.0[1] as i32).abs() +
-        (from.1[0] as i32 - to.1[0] as i32).abs() + (from.1[1] as i32 - to.1[1] as i32).abs()
-}
-
-const MINIMUM_CHOICES: usize = 5;
-
-fn get_choices(
-    next_frames: &NextFrames,
-    nearest: &HashMap<Bucket, Vec<&(Frame, Frame)>>,
-    previous: (Frame, Frame),
-) -> Vec<Frame> {
-    let default = Vec::new();
-    let pool = nearest.get(&bucket(previous)).unwrap_or_else(|| {
-
-        println!("nearest.get {:?} failed", bucket(previous));
-        &default
-    });
-
-    let mut nearest_n_keys = vec![(previous, 0)];
-
-    // let threshold = stopping_threshold(pool.len() as _, MINIMUM_CHOICES as _);
-    let threshold = pool.len();
-
-    for i in 0..(threshold) {
-        if let Some(current) = pool.get(i) {
-            let current_distance = distance_from(previous, **current);
-
-            let len = nearest_n_keys.len();
-            let mut not_inserted_yet = true;
-            for i in (0..len).rev() {
-                let (_, distance) = nearest_n_keys[i];
-
-                if current_distance > distance || i == 0 {
-                    nearest_n_keys.insert(i + 1, (**current, current_distance));
-
-                    not_inserted_yet = false;
-
-                    break;
-                }
-            }
-
-            if not_inserted_yet {
-                nearest_n_keys.insert(0, (**current, current_distance));
-            }
-
-            if len > MINIMUM_CHOICES {
-                nearest_n_keys.truncate(MINIMUM_CHOICES);
-            }
-
-        } else {
-            break;
-        }
-    }
-
-    let mut result = Vec::new();
-
-    for &(key, _) in nearest_n_keys.iter() {
-        if let Some(choices) = next_frames.get(&key) {
-            result.extend(choices);
-        }
-    }
-
-    result
-}
-
-
-type Bucket = (i8, i8, i8, i8);
-fn bucket(transition: (Frame, Frame)) -> Bucket {
-    // println!("transition {:?}", transition);
-
-    let result = (
-        (transition.0[0] / 128) as i8,
-        (transition.0[1] / 128) as i8,
-        (transition.1[0] / 128) as i8,
-        (transition.1[1] / 128) as i8,
-    );
-
-    // println!("bucket {:?}", result);
-
-    result
-}
-
-fn average_channels(frame: Frame) -> i16 {
-    debug_assert!(NUM_CHANNELS == 2);
-    frame[0].saturating_add(frame[1]) / 2
-}
-
-/// This is a genearlized solution to the well known secretary problem.
-/// see  [here](https://en.wikipedia.org/wiki/Secretary_problem).
-use std::f32::consts::E;
-/// `n` is the number of 'secretaries' available;
-/// `k` is the number we want to 'hire'.
-/// This formula is from the paper
-/// 'Optimal Online Data Sampling or How to Hire the Best Secretaries'
-/// [found here](http://cim.mcgill.ca/~yogesh/publications/crv2009.pdf),
-/// which does not provide a formal proof!
-fn stopping_threshold(n: f32, k: f32) -> usize {
-    (n / (k * (E.powf(1.0 / k)))) as usize
-}
-
-//I'm keeping this around in case I ever want to compare the optimal solution to
-//another approximate solution or if with a sufficienly long audio track the space
-//becomes dense enough that this strategy will work.
-// https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search
-#[allow(unused)]
-fn get_choices_slow(next_frames: &NextFrames, previous: (Frame, Frame)) -> Vec<Frame> {
-    let mut depth = 0;
-
-    let mut result = Vec::new();
-
-    let left = (-1, 0);
-    let up = (0, 1);
-    let right = (1, 0);
-    let down = (0, -1);
-
-    let upward = [left, up, right];
-    let downward = [right, down, left];
-    //`upward` and `downward` will cover the space that these would cover
-    //if they inculded `up` and `down`
-    let rightward = [right];
-    let leftward = [left];
-
-    while depth <= 16 {
-        get_choices_slow_helper(next_frames, previous, &mut result, &leftward, depth);
-        get_choices_slow_helper(next_frames, previous, &mut result, &upward, depth);
-        get_choices_slow_helper(next_frames, previous, &mut result, &rightward, depth);
-        get_choices_slow_helper(next_frames, previous, &mut result, &downward, depth);
-
-        if result.len() >= MINIMUM_CHOICES {
-            return result;
-        }
-
-        println!("depth {}", depth);
-        depth += 1;
-    }
-
-    result
-}
-
-#[allow(unused)]
-fn get_choices_slow_helper(
-    next_frames: &NextFrames,
-    current: (Frame, Frame),
-    result: &mut Vec<Frame>,
-    offsets: &[(i16, i16)],
-    depth: usize,
-) {
-    if depth == 0 {
-        if let Some(choices) = next_frames.get(&current) {
-            result.extend(choices);
-            result.dedup();
-        }
-
-        return;
-    }
-
-    // println!("current {:?} depth {}", current, depth);
-
-    for &(offset_0, offset_1) in offsets.iter() {
-        let new_key = (
-            saturating_add(current.0, offset_0),
-            saturating_add(current.1, offset_1),
-        );
-
-        get_choices_slow_helper(next_frames, new_key, result, offsets, depth - 1);
-
-        if result.len() >= MINIMUM_CHOICES {
-            return;
-        }
-    }
-}
-
 use std::collections::HashMap;
 
 type NextFrames = HashMap<(Frame, Frame), Vec<Frame>>;
@@ -473,29 +236,6 @@ fn get_next_frames(frames: &Vec<Frame>) -> NextFrames {
             .or_insert(Vec::new())
             .push(window[2]);
     }
-
-    // {
-    //     let silence_target = result.entry((SILENCE, SILENCE)).or_insert(Vec::new());
-    //
-    //     silence_target.retain(|&frame| frame != SILENCE);
-    //
-    //     if silence_target.len() == 0 {
-    //         let middle = frames[frames.len() / 2];
-    //
-    //         if middle == SILENCE {
-    //             for &frame in frames.iter() {
-    //                 if magnitude(&frame) > 256 {
-    //                     silence_target.push(frame);
-    //                     break;
-    //                 }
-    //             }
-    //         } else {
-    //             silence_target.push(middle);
-    //         }
-    //
-    //         println!("{:?}", silence_target);
-    //     }
-    // }
 
     result
 }
@@ -511,32 +251,6 @@ fn magnitude(frame: &Frame) -> i16 {
     frame
         .iter()
         .fold(0, |acc, channel_value| max(acc, channel_value.abs()))
-}
-
-fn saturating_add(frame: Frame, x: i16) -> Frame {
-    [frame[0].saturating_add(x), frame[1].saturating_add(x)]
-}
-fn saturating_sub(frame: Frame, x: i16) -> Frame {
-    [frame[0].saturating_sub(x), frame[1].saturating_sub(x)]
-}
-
-
-fn key_round_frame(frame: Frame) -> Frame {
-    [key_round(frame[0]), key_round(frame[1])]
-}
-
-fn key_round(x: i16) -> i16 {
-    // if x & 0b10 == 0 {
-    //     x & !0b11
-    // } else {
-    //     (x | 0b11).saturating_add(1)
-    // }
-    if x & 1 == 0 {
-        x
-    } else {
-        (x).saturating_add(1)
-    }
-
 }
 
 fn write_frames(frames: &Vec<Frame>, optional_name: Option<&str>) {
