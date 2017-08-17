@@ -21,15 +21,22 @@ use clap::{App, Arg};
 
 fn main() {
     let matches = App::new("markov_jukebox")
-        .arg(Arg::with_name("filenames").takes_value(true).required(true))
+        .arg(
+            Arg::with_name("filenames")
+                .help("the path(s) of the file(s) you wish to blend together.")
+                .takes_value(true)
+                .required(true),
+        )
         .arg(
             Arg::with_name("play")
                 .short("p")
                 .help("play the files before processing them"),
         )
-        .arg(Arg::with_name("keep").short("k").help(
-            "allow endless generation by keeping used samples available for the repeat uses.",
-        ))
+        .arg(
+            Arg::with_name("keep")
+                .short("k")
+                .help("keep used samples available for repeat uses."),
+        )
         .arg(
             Arg::with_name("seed")
                 .short("s")
