@@ -105,10 +105,20 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
 
     let mut reader = hound::WavReader::open(file_name).unwrap();
     let spec = reader.spec();
+
     assert!(spec.channels > 0, "{} says it has 0 channels?!", file_name);
     let duration = reader.duration();
     let new_duration = (duration as f64 * (SAMPLE_RATE as f64 / spec.sample_rate as f64)) as usize;
-    let samples = reader.samples().map(|s| s.unwrap());
+    let samples: Box<Iterator<Item = i16>> = if spec.bits_per_sample <= 16 {
+        Box::new(reader.samples().map(|s| s.unwrap()))
+    } else {
+        Box::new(reader.samples::<f32>().map(|s| {
+            let f: f32 = s.unwrap();
+
+            (f * 32768.0) as i16
+        }))
+    };
+
     let adjusted_samples: Vec<_> = if spec.channels == 2 {
         samples.collect()
     } else if spec.channels <= 1 {
@@ -120,6 +130,7 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
             .map(|(_, s)| s)
             .collect()
     };
+
     let signal = signal::from_interleaved_samples::<_, Frame>(adjusted_samples.iter().cloned());
 
     signal
