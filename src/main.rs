@@ -21,6 +21,7 @@ fn main() {
     let matches = App::new("markov_jukebox")
         .arg(
             Arg::with_name("filenames")
+                .multiple(true)
                 .help("the path(s) of the file(s) you wish to blend together.")
                 .takes_value(true)
                 .required(true),
@@ -36,10 +37,14 @@ fn main() {
                 .takes_value(true)
                 .help("the seed for the pseudo-random generator"),
         )
+        .arg(Arg::with_name("debug").short("d").help(
+            "just write files directly to output. overrides all other flags",
+        ))
         .get_matches();
 
     //there used to be a `play` option. That's why this is a struct instead of a bool
     let settings = Settings {
+        blend: !matches.is_present("debug"),
         remove: !matches.is_present("keep"),
     };
 
@@ -68,6 +73,7 @@ fn main() {
 
 struct Settings {
     pub remove: bool,
+    pub blend: bool,
 }
 
 fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<(), ()> {
@@ -83,8 +89,12 @@ fn run<R: Rng>(filenames: Vec<&str>, settings: Settings, rng: &mut R) -> Result<
         frames
     };
 
-    let blended_frames = blend_frames(&frames, rng, settings.remove);
-    write_frames(&blended_frames, None);
+    if settings.blend {
+        let blended_frames = blend_frames(&frames, rng, settings.remove);
+        write_frames(&blended_frames, None);
+    } else {
+        write_frames(&frames, None);
+    }
 
     Ok(())
 }
@@ -95,10 +105,23 @@ fn read_frames(file_name: &str) -> Vec<Frame> {
 
     let mut reader = hound::WavReader::open(file_name).unwrap();
     let spec = reader.spec();
+    assert!(spec.channels > 0, "{} says it has 0 channels?!", file_name);
     let duration = reader.duration();
     let new_duration = (duration as f64 * (SAMPLE_RATE as f64 / spec.sample_rate as f64)) as usize;
     let samples = reader.samples().map(|s| s.unwrap());
-    let signal = signal::from_interleaved_samples::<_, Frame>(samples);
+    let adjusted_samples: Vec<_> = if spec.channels == 2 {
+        samples.collect()
+    } else if spec.channels <= 1 {
+        samples.flat_map(|s| vec![s, s]).collect()
+    } else {
+        samples
+            .enumerate()
+            .filter(|&(i, _)| i % (spec.channels as usize) < 2)
+            .map(|(_, s)| s)
+            .collect()
+    };
+    let signal = signal::from_interleaved_samples::<_, Frame>(adjusted_samples.iter().cloned());
+
     signal
         .from_hz_to_hz(spec.sample_rate as f64, SAMPLE_RATE as f64)
         .take(new_duration)
