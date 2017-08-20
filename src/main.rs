@@ -13,12 +13,13 @@ pub type Frame = [i16; NUM_CHANNELS];
 
 const SAMPLE_RATE: f64 = 44_100.0;
 
-
+#[macro_use]
 extern crate clap;
 use clap::{App, Arg};
 
 fn main() {
     let matches = App::new("markov_jukebox")
+        .version(crate_version!())
         .arg(
             Arg::with_name("filenames")
                 .multiple(true)
